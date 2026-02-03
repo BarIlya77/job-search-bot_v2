@@ -1,6 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, func
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import select, delete
 from datetime import datetime
 from src.storage.models import UserFilter
 from logger import get_logger

@@ -1,8 +1,8 @@
-# src/services/filter_service.py
 from typing import Dict, Any
 from logger import get_logger
 from src.storage.database import get_session
 from src.storage.repositories.filter_repo import get_filter_repo
+from src.services.city_mapping import get_city_id  # Импортируем из отдельного файла
 
 logger = get_logger(__name__)
 
@@ -24,10 +24,10 @@ class FilterService:
         # Текстовый запрос (профессия)
         if filters.get('profession'):
             params['text'] = filters['profession']
+            params['search_field'] = 'name'
 
         # Опыт работы
         if filters.get('experience'):
-            # HH API ожидает такие значения опыта
             exp_map = {
                 'noExperience': 'noExperience',
                 'between1And3': 'between1And3',
@@ -49,7 +49,6 @@ class FilterService:
 
         # График работы
         if filters.get('schedule'):
-            # HH API ожидает schedule значения
             schedule_map = {
                 'office': 'fullDay',
                 'remote': 'remote',
@@ -60,19 +59,42 @@ class FilterService:
             if schedule_value:
                 params['schedule'] = schedule_value
 
-        # Город
+        # Тип занятости
+        if filters.get('employment'):
+            employment_map = {
+                'fullDay': 'full',
+                'partDay': 'part',
+                'project': 'project',
+                'internship': 'probation'
+            }
+            employment_value = employment_map.get(filters['employment'])
+            if employment_value:
+                params['employment'] = employment_value
+
+        # Город - используем функцию из отдельного файла
         if filters.get('area'):
             area = filters['area']
-            # Если это ID города (число в строке)
-            if area.isdigit():
-                params['area'] = int(area)
-            # Если это "remote"
-            elif area == 'remote':
+
+            if area == 'remote':
                 params['schedule'] = 'remote'
-            # Если это название города - добавляем в текстовый поиск
+            elif area.isdigit():
+                params['area'] = area
             else:
-                current_text = params.get('text', '')
-                params['text'] = f"{current_text} {area}".strip()
+                # Используем функцию из city_mapping.py
+                city_id = get_city_id(area)
+                if city_id:
+                    params['area'] = city_id
+                else:
+                    current_text = params.get('text', '')
+                    params['text'] = f"{current_text} {area}".strip()
+                    logger.warning(f"Город '{area}' не найден в маппинге")
+
+        # Обязательные параметры
+        params.update({
+            'per_page': 20,
+            'page': 0,
+            'order_by': 'publication_time',
+        })
 
         logger.info(f"Преобразованные параметры HH API: {params}")
         return params

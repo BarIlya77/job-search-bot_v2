@@ -3,7 +3,6 @@ import sys
 from typing import Optional
 from config import config
 
-
 class CustomFormatter(logging.Formatter):
     """Кастомный форматтер для цветного вывода"""
 
@@ -29,7 +28,6 @@ class CustomFormatter(logging.Formatter):
         log_fmt = self.FORMATS.get(record.levelno)
         formatter = logging.Formatter(log_fmt)
         return formatter.format(record)
-
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
     """Создает и настраивает логгер"""

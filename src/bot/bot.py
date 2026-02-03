@@ -15,6 +15,8 @@ async def setup_bot(token: str) -> Application:
 
     # Регистрируем обработчики
     logger.info("Регистрация обработчиков...")
+
+    # Базовые обработчики (команды и текст)
     setup_handlers(application)
 
     # Callback-обработчики фильтров

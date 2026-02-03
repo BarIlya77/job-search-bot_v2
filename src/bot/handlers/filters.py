@@ -53,6 +53,7 @@ class FilterHandler:
             }
             parts.append(f"🏢 Занятость: {employment_map.get(filters['employment'], filters['employment'])}")
         if filters.get('area'):
+            area = filters['area']
             area_map = {
                 '1': 'Москва',
                 '2': 'Санкт-Петербург',
@@ -60,7 +61,6 @@ class FilterHandler:
                 '4': 'Новосибирск',
                 'remote': 'Удалённо'
             }
-            area = filters['area']
             parts.append(f"🌍 Город: {area_map.get(area, area)}")
 
         return "\n".join(parts) if parts else "❌ Фильтры не настроены"
@@ -263,7 +263,6 @@ class FilterHandler:
         user_id = query.from_user.id
 
         if data == "filters_save":
-            # Просто возвращаем в главное меню
             await query.edit_message_text(
                 "✅ Фильтры сохранены!",
                 reply_markup=None
@@ -296,7 +295,6 @@ class FilterHandler:
 
         try:
             if filter_type == 'salary_min':
-                # Проверяем, что введено число
                 salary = ''.join(filter(str.isdigit, text))
                 if not salary:
                     await update.message.reply_text("❌ Пожалуйста, введите число!")
@@ -317,6 +315,7 @@ class FilterHandler:
                 await update.message.reply_text(f"✅ Профессия сохранена: {text}")
 
             elif filter_type == 'area':
+                # Сохраняем как есть, преобразование будет в filter_service
                 async for session in get_session():
                     repo = get_filter_repo(session)
                     await repo.save_filter(user_id, 'area', text)
@@ -357,5 +356,5 @@ def setup_callbacks(application):
     # Обработчик текстового ввода для фильтров
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_filter_text),
-        group=1  # Высокий приоритет
+        group=1
     )

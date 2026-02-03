@@ -22,7 +22,7 @@ class UserFilter(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    filter_type = Column(String(50), nullable=False)  # 'profession', 'salary_min', 'experience', etc
+    filter_type = Column(String(50), nullable=False)
     filter_value = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())

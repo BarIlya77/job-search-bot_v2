@@ -1,5 +1,7 @@
-# src/services/hh_client.py (основываемся на вашей рабочей версии)
 import aiohttp
+import asyncio
+import json
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 from logger import get_logger
 
@@ -11,86 +13,60 @@ class HHAPIClient:
 
     BASE_URL = "https://api.hh.ru"
 
-    def __init__(self):
-        self.session = None
-
-    async def __aenter__(self):
-        self.session = aiohttp.ClientSession()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
-            await self.session.close()
-
-    def _prepare_params(self, params: Dict) -> Dict:
-        """Подготовка параметров - преобразование типов для HH API"""
-        prepared = {}
-
-        for key, value in params.items():
-            if value is None:
-                continue
-
-            # Преобразуем булевы значения в строки
-            if isinstance(value, bool):
-                prepared[key] = str(value).lower()
-            # Преобразуем числа в строки (кроме area)
-            elif isinstance(value, (int, float)) and key != 'area':
-                prepared[key] = str(value)
-            # Для area оставляем как есть
-            elif key == 'area' and isinstance(value, (int, str)):
-                prepared[key] = str(value)
-            # Для строк оставляем как есть
-            elif isinstance(value, str):
-                prepared[key] = value
-            # Для остальных типов преобразуем в строку
-            else:
-                prepared[key] = str(value)
-
-        return prepared
-
     async def search_vacancies(self, **params) -> List[Dict]:
         """Поиск вакансий по параметрам"""
-        # Стандартные параметры
-        default_params = {
-            "area": 1,  # Москва по умолчанию
-            "per_page": 10,  # Количество результатов
-            "page": 0,  # Страница
-            "order_by": "publication_time",
-            "search_field": "name",  # Искать в названии
-        }
+        # Очищаем None значения
+        search_params = {k: v for k, v in params.items() if v is not None}
 
-        # Обновляем параметры
-        default_params.update(params)
+        # Подготовка параметров
+        prepared_params = {}
+        for key, value in search_params.items():
+            if isinstance(value, bool):
+                prepared_params[key] = str(value).lower()
+            elif isinstance(value, (int, float)):
+                prepared_params[key] = str(value)
+            elif isinstance(value, str):
+                prepared_params[key] = value
+            elif value is not None:
+                prepared_params[key] = str(value)
 
-        # Очищаем None и преобразуем типы
-        search_params = {k: v for k, v in default_params.items() if v is not None}
-        search_params = self._prepare_params(search_params)
-
-        # Убираем параметры, которые могут вызвать ошибки
-        if 'search_field' in search_params and not search_params.get('text'):
-            del search_params['search_field']
-
-        logger.info(f"Поиск вакансий с параметрами: {search_params}")
+        logger.info(f"Поиск вакансий с параметрами: {json.dumps(prepared_params, ensure_ascii=False)}")
 
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                         f"{self.BASE_URL}/vacancies",
-                        params=search_params,
-                        headers={"User-Agent": "JobSearchBot/1.0"}
+                        params=prepared_params,
+                        headers={
+                            "User-Agent": "JobSearchBot/1.0 (job-search-bot@example.com)",
+                            "HH-User-Agent": "JobBot/1.0"
+                        },
+                        timeout=aiohttp.ClientTimeout(total=30)
                 ) as response:
+
+                    response_text = await response.text()
+                    logger.debug(f"Ответ API (статус {response.status}): {response_text[:500]}...")
 
                     if response.status == 200:
                         data = await response.json()
                         vacancies = data.get("items", [])
-                        logger.info(f"Найдено вакансий: {len(vacancies)}")
+                        found = data.get("found", 0)
+                        pages = data.get("pages", 0)
+
+                        logger.info(f"Найдено вакансий: {found}, страниц: {pages}, возвращено: {len(vacancies)}")
                         return vacancies
                     else:
-                        logger.error(f"Ошибка API: {response.status}, текст: {await response.text()}")
+                        logger.error(f"Ошибка API {response.status}: {response_text}")
                         return []
 
+        except aiohttp.ClientError as e:
+            logger.error(f"Ошибка сети при запросе к HH API: {e}")
+            return []
+        except asyncio.TimeoutError:
+            logger.error("Таймаут при запросе к HH API")
+            return []
         except Exception as e:
-            logger.error(f"Ошибка запроса к API: {e}", exc_info=True)
+            logger.error(f"Неожиданная ошибка при запросе к HH API: {e}", exc_info=True)
             return []
 
     async def get_vacancy_details(self, vacancy_id: str) -> Optional[Dict]:
@@ -99,7 +75,10 @@ class HHAPIClient:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                         f"{self.BASE_URL}/vacancies/{vacancy_id}",
-                        headers={"User-Agent": "JobSearchBot/1.0"}
+                        headers={
+                            "User-Agent": "JobSearchBot/1.0",
+                            "HH-User-Agent": "JobBot/1.0"
+                        }
                 ) as response:
 
                     if response.status == 200:
@@ -112,6 +91,62 @@ class HHAPIClient:
             logger.error(f"Ошибка получения вакансии {vacancy_id}: {e}")
             return None
 
+    def _format_time_ago(self, published_at_str: str) -> str:
+        """Форматирует время публикации в понятный формат"""
+        try:
+            # Парсим дату из формата HH API (например: "2024-01-23T14:30:00+0300")
+            # Убираем возможное двоеточие в часовом поясе для совместимости
+            if published_at_str[-3] == ":":
+                published_at_str = published_at_str[:-3] + published_at_str[-2:]
+
+            dt_format = "%Y-%m-%dT%H:%M:%S%z"
+            published_at = datetime.strptime(published_at_str, dt_format)
+            now = datetime.now(timezone.utc)
+
+            # Приводим к одному часовому поясу (UTC) для сравнения
+            published_at_utc = published_at.astimezone(timezone.utc)
+            now_utc = now.astimezone(timezone.utc)
+
+            time_diff = now_utc - published_at_utc
+
+            # Определяем формат отображения
+            if time_diff.days > 30:
+                # Больше месяца - показываем дату
+                return f"📅 {published_at.strftime('%d.%m.%Y')}"
+            elif time_diff.days > 0:
+                # Дни назад
+                days = time_diff.days
+                if days == 1:
+                    return "🕐 1 день назад"
+                elif 2 <= days <= 4:
+                    return f"🕐 {days} дня назад"
+                else:
+                    return f"🕐 {days} дней назад"
+            elif time_diff.seconds >= 3600:
+                # Часы назад
+                hours = time_diff.seconds // 3600
+                if hours == 1:
+                    return "🕐 1 час назад"
+                elif 2 <= hours <= 4:
+                    return f"🕐 {hours} часа назад"
+                else:
+                    return f"🕐 {hours} часов назад"
+            elif time_diff.seconds >= 60:
+                # Минуты назад
+                minutes = time_diff.seconds // 60
+                if minutes == 1:
+                    return "🕐 1 минуту назад"
+                elif 2 <= minutes <= 4:
+                    return f"🕐 {minutes} минуты назад"
+                else:
+                    return f"🕐 {minutes} минут назад"
+            else:
+                return "🕐 Только что"
+
+        except Exception as e:
+            logger.error(f"Ошибка форматирования времени: {e}")
+            return "🕐 Недавно"
+
     def format_vacancy_message(self, vacancy: Dict) -> str:
         """Форматирование вакансии в читаемое сообщение"""
         title = vacancy.get('name', 'Без названия')
@@ -120,6 +155,12 @@ class HHAPIClient:
         area = vacancy.get('area', {}).get('name', 'Не указано')
         experience = vacancy.get('experience', {}).get('name', 'Не указан')
         url = vacancy.get('alternate_url', '')
+
+        # Добавляем информацию о публикации
+        published_at = vacancy.get('published_at')
+        time_info = ""
+        if published_at:
+            time_info = self._format_time_ago(published_at)
 
         # Форматируем зарплату
         salary_text = "не указана"
@@ -142,8 +183,13 @@ class HHAPIClient:
             f"💰 *Зарплата:* {salary_text}\n"
             f"📍 *Местоположение:* {area}\n"
             f"📊 *Опыт:* {experience}\n"
-            f"🔗 [Ссылка на вакансию]({url})"
         )
+
+        # Добавляем информацию о времени публикации
+        if time_info:
+            message += f"\n{time_info}\n"
+
+        message += f"\n🔗 [Ссылка на вакансию]({url})"
 
         return message
 
