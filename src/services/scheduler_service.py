@@ -85,10 +85,12 @@ class SchedulerService:
 
     async def check_new_vacancies_for_user(self, session, user: User):
         """Проверка новых вакансий для конкретного пользователя"""
+        logger.info(f"🔍 Проверка вакансий для пользователя {user.id} (Telegram: {user.telegram_id})")
+
         # Получаем фильтры пользователя
         repo = FilterRepository(session)
-        filters = await repo.get_user_filters(user.id)
-
+        filters = await repo.get_user_filters(user.telegram_id)
+        logger.info(f"🔍 Фильтры пользователя {user.id} (filters: {filters})")
         if not filters:
             logger.debug(f"Пользователь {user.id} не имеет настроенных фильтров, пропускаем")
             return
@@ -181,20 +183,14 @@ class SchedulerService:
             except Exception as e:
                 logger.error(f"Ошибка при отправке уведомления: {e}")
 
-        # Добавляем кнопку для просмотра всех вакансий
+        # Если вакансий больше 3, предлагаем использовать ручной поиск
         if len(vacancies) > 3:
-            from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔍 Показать все вакансии", callback_data="show_all_vacancies")]
-            ])
-
             await self.bot.send_message(
                 chat_id=chat_id,
                 text=f"📊 *Всего найдено {len(vacancies)} новых вакансий.*\n"
-                     f"Нажмите кнопку ниже чтобы увидеть все результаты.",
-                parse_mode='Markdown',
-                reply_markup=keyboard
+                     f"Используйте кнопку *🔍 Поиск вакансий* в главном меню, "
+                     f"чтобы увидеть все результаты.",
+                parse_mode='Markdown'
             )
 
     async def clear_user_history(self, user_id: int):
@@ -230,3 +226,30 @@ class SchedulerService:
             'active_users': len(active_users),
             'users_with_filters': len(users_with_filters)
         }
+
+
+# Вместо глобальной переменной используем класс для хранения экземпляра
+class SchedulerManager:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        """Получить экземпляр планировщика"""
+        return cls._instance
+
+    @classmethod
+    def init_scheduler(cls, bot):
+        """Инициализировать планировщик"""
+        cls._instance = SchedulerService(bot)
+        return cls._instance
+
+
+# Функции для удобства
+def get_scheduler():
+    """Получить экземпляр планировщика"""
+    return SchedulerManager.get_instance()
+
+
+def init_scheduler(bot):
+    """Инициализировать планировщик"""
+    return SchedulerManager.init_scheduler(bot)

@@ -191,11 +191,6 @@ class VacancyHandler:
             vacancy_id = data.replace("cover_", "")
             await query.answer("📝 Функция в разработке")
 
-        elif data == "show_all_vacancies":
-            # Инициируем обычный поиск вакансий
-            await query.answer("🔍 Запускаю поиск всех вакансий...")
-            await self.search_vacancies(update, context)
-
         elif data == "page_info":
             await query.answer(f"Текущая страница")
 

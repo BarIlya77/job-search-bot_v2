@@ -15,6 +15,33 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"Пользователь {user.id} ({user.username}) начал работу")
 
+    # СОЗДАЕМ ПОЛЬЗОВАТЕЛЯ В БАЗЕ
+    from src.storage.database import AsyncSessionLocal
+    from src.storage.models import User
+    from sqlalchemy import select
+
+    async with AsyncSessionLocal() as session:
+        stmt = select(User).where(User.telegram_id == user.id)
+        result = await session.execute(stmt)
+        existing_user = result.scalar_one_or_none()
+
+        if existing_user:
+            existing_user.first_name = user.first_name
+            existing_user.username = user.username
+            existing_user.is_active = True
+            logger.info(f"Обновлен пользователь {user.id}")
+        else:
+            new_user = User(
+                telegram_id=user.id,
+                first_name=user.first_name,
+                username=user.username,
+                is_active=True
+            )
+            session.add(new_user)
+            logger.info(f"Создан новый пользователь {user.id}")
+
+        await session.commit()
+
     welcome_text = (
         f"👋 Привет, {user.first_name}!\n\n"
         "Я — бот для поиска работы на HH.ru.\n"
@@ -78,17 +105,20 @@ async def scheduler_status_command(update: Update, context: ContextTypes.DEFAULT
 
         next_run = status['next_run']
         if next_run:
-            next_run_str = next_run.strftime("%d.%m.%Y в %H:%M:%S")
+            # Форматируем дату без специальных символов
+            next_run_str = next_run.strftime("%d.%m.%Y в %H:%M")
         else:
             next_run_str = "не запланировано"
 
-        # Без разметки - просто текст
+        # Формируем сообщение БЕЗ Markdown
         status_text = (
             "📊 Статус планировщика\n\n"
             f"• Статус: {'🟢 Запущен' if status['running'] else '🔴 Остановлен'}\n"
             f"• Интервал проверки: {status['check_interval']} минут\n"
             f"• Следующая проверка: {next_run_str}\n"
             f"• Отслеживается пользователей: {status['users_tracked']}\n"
+            f"• Активных пользователей: {status['active_users']}\n"
+            f"• Пользователей с фильтрами: {status['users_with_filters']}\n"
             f"• Количество задач: {status['job_count']}\n\n"
             "Команды управления:\n"
             "/scheduler_start - запустить планировщик\n"
@@ -96,6 +126,7 @@ async def scheduler_status_command(update: Update, context: ContextTypes.DEFAULT
             "/scheduler_interval X - изменить интервал (в минутах)"
         )
 
+        # Отправляем БЕЗ parse_mode
         await update.message.reply_text(
             status_text,
             reply_markup=get_main_keyboard(),
@@ -103,10 +134,11 @@ async def scheduler_status_command(update: Update, context: ContextTypes.DEFAULT
         )
 
     except Exception as e:
-        logger.error(f"Ошибка при получении статуса планировщика: {e}")
+        logger.error(f"Ошибка при получении статуса планировщика: {e}", exc_info=True)
+        # Отправляем сообщение без Markdown на случай ошибки
         await update.message.reply_text(
-            f"📊 Статус планировщика:\n\n"
-            f"Возникла ошибка при получении статуса: {str(e)[:100]}\n\n"
+            "📊 Статус планировщика:\n\n"
+            f"Возникла ошибка при получении статуса.\n"
             f"Попробуйте позже или перезапустите планировщик.",
             reply_markup=get_main_keyboard()
         )
@@ -117,7 +149,13 @@ async def scheduler_start_command(update: Update, context: ContextTypes.DEFAULT_
     scheduler = get_scheduler()
 
     if not scheduler:
-        await update.message.reply_text("❌ Планировщик не инициализирован")
+        if update.message:
+            await update.message.reply_text("❌ Планировщик не инициализирован")
+        elif update.effective_chat:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Планировщик не инициализирован"
+            )
         return
 
     # Получаем интервал из аргументов или используем значение по умолчанию
@@ -126,14 +164,46 @@ async def scheduler_start_command(update: Update, context: ContextTypes.DEFAULT_
         try:
             interval = int(context.args[0])
             if interval < 5:
-                await update.message.reply_text("❌ Интервал должен быть не менее 5 минут")
+                if update.message:
+                    await update.message.reply_text("❌ Интервал должен быть не менее 5 минут")
+                elif update.effective_chat:
+                    await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text="❌ Интервал должен быть не менее 5 минут"
+                    )
                 return
         except ValueError:
-            await update.message.reply_text("❌ Неверный формат числа. Используйте: /scheduler_start 60")
+            error_message = "❌ Неверный формат числа. Используйте: /scheduler_start 60"
+            if update.message:
+                await update.message.reply_text(error_message)
+            elif update.effective_chat:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=error_message
+                )
             return
 
-    await scheduler.start(interval)
-    await update.message.reply_text(f"✅ Планировщик запущен с интервалом {interval} минут!")
+    try:
+        await scheduler.start(interval)
+        success_message = f"✅ Планировщик запущен с интервалом {interval} минут!"
+
+        if update.message:
+            await update.message.reply_text(success_message)
+        elif update.effective_chat:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=success_message
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при запуске планировщика: {e}")
+        error_message = f"❌ Ошибка при запуске планировщика: {str(e)[:100]}"
+        if update.message:
+            await update.message.reply_text(error_message)
+        elif update.effective_chat:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=error_message
+            )
 
 
 async def scheduler_stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -141,11 +211,36 @@ async def scheduler_stop_command(update: Update, context: ContextTypes.DEFAULT_T
     scheduler = get_scheduler()
 
     if not scheduler:
-        await update.message.reply_text("❌ Планировщик не инициализирован")
+        if update.message:
+            await update.message.reply_text("❌ Планировщик не инициализирован")
+        elif update.effective_chat:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Планировщик не инициализирован"
+            )
         return
 
-    await scheduler.stop()
-    await update.message.reply_text("🛑 Планировщик остановлен")
+    try:
+        await scheduler.stop()
+        success_message = "🛑 Планировщик остановлен"
+
+        if update.message:
+            await update.message.reply_text(success_message)
+        elif update.effective_chat:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=success_message
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при остановке планировщика: {e}")
+        error_message = f"❌ Ошибка при остановке планировщика: {str(e)[:100]}"
+        if update.message:
+            await update.message.reply_text(error_message)
+        elif update.effective_chat:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=error_message
+            )
 
 
 async def scheduler_interval_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -153,7 +248,6 @@ async def scheduler_interval_command(update: Update, context: ContextTypes.DEFAU
     scheduler = get_scheduler()
 
     if not scheduler:
-        # Используем безопасный способ отправки сообщения
         if update.message:
             await update.message.reply_text("❌ Планировщик не инициализирован")
         elif update.effective_chat:
@@ -244,8 +338,6 @@ async def handle_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     elif text == "❓ Помощь":
         await help_command(update, context)
-    elif text == "Test":
-        await test_command(update, context)
     else:
         await update.message.reply_text(
             "🤖 Я понимаю только команды из меню.\n\n"

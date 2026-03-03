@@ -78,6 +78,7 @@ class FilterHandler:
         async for session in get_session():
             repo = get_filter_repo(session)
             current_filters = await repo.get_user_filters(user_id)
+            logger.info(f"🔍 Фильтры пользователя в фильтрах {user_id} (filters: {current_filters})")
 
         # Формируем текст с текущими настройками
         filters_text = self._format_filters_text(current_filters)
